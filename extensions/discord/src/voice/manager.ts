@@ -30,13 +30,13 @@ const require = createRequire(import.meta.url);
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
-const MIN_SEGMENT_SECONDS = 0.35;
-const SILENCE_DURATION_MS = 1_000;
+const DEFAULT_MIN_SEGMENT_SECONDS = 0.35;
+const DEFAULT_SILENCE_DURATION_MS = 1_000;
 const PLAYBACK_READY_TIMEOUT_MS = 15_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
-const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
-const DECRYPT_FAILURE_PATTERN = /DecryptionFailed\(/;
+const DEFAULT_DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
+const DECRYPT_FAILURE_PATTERN = /DecryptionFailed\(|operation was aborted/i;
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
 
 const logger = createSubsystemLogger("discord/voice");
@@ -65,6 +65,9 @@ type VoiceSessionEntry = {
   decryptFailureCount: number;
   lastDecryptFailureAt: number;
   decryptRecoveryInFlight: boolean;
+  decryptFailureThreshold: number;
+  silenceDurationMs: number;
+  minSegmentSeconds: number;
   stop: () => void;
 };
 
@@ -196,8 +199,15 @@ function estimateDurationSeconds(pcm: Buffer): number {
   return pcm.length / (bytesPerSample * SAMPLE_RATE);
 }
 
+function resolveVoiceTempRoot(): string {
+  const ramBackedTmp = "/dev/shm";
+  return require("node:fs").existsSync(ramBackedTmp)
+    ? ramBackedTmp
+    : resolvePreferredOpenClawTmpDir();
+}
+
 async function writeWavFile(pcm: Buffer): Promise<{ path: string; durationSeconds: number }> {
-  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"));
+  const tempDir = await fs.mkdtemp(path.join(resolveVoiceTempRoot(), "discord-voice-"));
   const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
   const wav = buildWavBuffer(pcm);
   await fs.writeFile(filePath, wav);
@@ -363,10 +373,12 @@ export class DiscordVoiceManager {
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = this.params.discordConfig.voice?.daveEncryption;
     const decryptionFailureTolerance = this.params.discordConfig.voice?.decryptionFailureTolerance;
+    const silenceDurationMs = this.resolveSilenceDurationMs();
+    const minSegmentSeconds = this.resolveMinSegmentSeconds();
     logVoiceVerbose(
       `join: DAVE settings encryption=${daveEncryption === false ? "off" : "on"} tolerance=${
         decryptionFailureTolerance ?? "default"
-      }`,
+      } silence=${silenceDurationMs}ms minSegment=${minSegmentSeconds.toFixed(2)}s`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
     const connection = voiceSdk.joinVoiceChannel({
@@ -434,6 +446,9 @@ export class DiscordVoiceManager {
       decryptFailureCount: 0,
       lastDecryptFailureAt: 0,
       decryptRecoveryInFlight: false,
+      decryptFailureThreshold: this.resolveDecryptFailureThreshold(),
+      silenceDurationMs: this.resolveSilenceDurationMs(),
+      minSegmentSeconds: this.resolveMinSegmentSeconds(),
       stop: () => {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
@@ -550,7 +565,7 @@ export class DiscordVoiceManager {
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
         behavior: voiceSdk.EndBehaviorType.AfterSilence,
-        duration: SILENCE_DURATION_MS,
+        duration: entry.silenceDurationMs,
       },
     });
     stream.on("error", (err) => {
@@ -567,9 +582,9 @@ export class DiscordVoiceManager {
       }
       this.resetDecryptFailureState(entry);
       const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
-      if (durationSeconds < MIN_SEGMENT_SECONDS) {
+      if (durationSeconds < entry.minSegmentSeconds) {
         logVoiceVerbose(
-          `capture too short (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          `capture too short (${durationSeconds.toFixed(2)}s < ${entry.minSegmentSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
         );
         return;
       }
@@ -708,7 +723,7 @@ export class DiscordVoiceManager {
       );
     }
     if (
-      entry.decryptFailureCount < DECRYPT_FAILURE_RECONNECT_THRESHOLD ||
+      entry.decryptFailureCount < entry.decryptFailureThreshold ||
       entry.decryptRecoveryInFlight
     ) {
       return;
@@ -722,6 +737,28 @@ export class DiscordVoiceManager {
       .finally(() => {
         entry.decryptRecoveryInFlight = false;
       });
+  }
+
+  private resolveDecryptFailureThreshold(): number {
+    return Math.max(
+      1,
+      this.params.discordConfig.voice?.decryptionFailureTolerance ??
+        DEFAULT_DECRYPT_FAILURE_RECONNECT_THRESHOLD,
+    );
+  }
+
+  private resolveSilenceDurationMs(): number {
+    return Math.max(
+      1,
+      this.params.discordConfig.voice?.silenceDurationMs ?? DEFAULT_SILENCE_DURATION_MS,
+    );
+  }
+
+  private resolveMinSegmentSeconds(): number {
+    return Math.max(
+      0,
+      this.params.discordConfig.voice?.minSegmentSeconds ?? DEFAULT_MIN_SEGMENT_SECONDS,
+    );
   }
 
   private resetDecryptFailureState(entry: VoiceSessionEntry) {

@@ -129,8 +129,12 @@ export type DiscordVoiceConfig = {
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
-  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24 in sdk; also used by OpenClaw voice recovery when set). */
   decryptionFailureTolerance?: number;
+  /** Milliseconds of silence before a Discord voice capture segment is finalized. */
+  silenceDurationMs?: number;
+  /** Minimum decoded segment duration, in seconds, before STT is attempted. */
+  minSegmentSeconds?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };

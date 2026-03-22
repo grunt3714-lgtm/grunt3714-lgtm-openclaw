@@ -85,9 +85,13 @@ vi.mock("@discordjs/voice", () => ({
   joinVoiceChannel: joinVoiceChannelMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: resolveAgentRouteMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -99,6 +103,24 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
 
 vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
   transcribeAudioFile: transcribeAudioFileMock,
+}));
+
+vi.mock("./sdk-runtime.js", () => ({
+  loadDiscordVoiceSdk: () => ({
+    AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
+    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    VoiceConnectionStatus: {
+      Ready: "ready",
+      Disconnected: "disconnected",
+      Destroyed: "destroyed",
+      Signalling: "signalling",
+      Connecting: "connecting",
+    },
+    createAudioPlayer: createAudioPlayerMock,
+    createAudioResource: vi.fn(),
+    entersState: entersStateMock,
+    joinVoiceChannel: joinVoiceChannelMock,
+  }),
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -292,6 +314,71 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses configured decrypt failure tolerance for manager-side rejoin", async () => {
+    const manager = createManager({
+      voice: {
+        decryptionFailureTolerance: 1,
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    emitDecryptFailure(manager);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats aborted receive errors like decrypt failures for recovery", async () => {
+    const manager = createManager({
+      voice: {
+        decryptionFailureTolerance: 1,
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    expect(entry).toBeDefined();
+    (
+      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
+    ).handleReceiveError(entry, new Error("The operation was aborted"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses configured silence duration when subscribing to speaker audio", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      voice: {
+        silenceDurationMs: 650,
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | { connection: typeof connection }
+      | undefined;
+    expect(entry).toBeDefined();
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-1");
+
+    expect(connection.receiver.subscribe).toHaveBeenCalledWith(
+      "u-1",
+      expect.objectContaining({
+        end: expect.objectContaining({ duration: 650 }),
+      }),
+    );
   });
 
   it("passes senderIsOwner=true for allowlisted voice speakers", async () => {

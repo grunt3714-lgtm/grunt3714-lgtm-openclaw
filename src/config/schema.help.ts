@@ -1604,7 +1604,11 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.voice.daveEncryption":
     "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
   "channels.discord.voice.decryptionFailureTolerance":
-    "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+    "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24). When set, OpenClaw Discord voice also uses it as the receive-side rejoin threshold.",
+  "channels.discord.voice.silenceDurationMs":
+    "Milliseconds of silence before a Discord voice capture segment is finalized. Lower values reduce latency but can clip pauses.",
+  "channels.discord.voice.minSegmentSeconds":
+    "Minimum decoded Discord voice segment duration, in seconds, before STT is attempted. Raise this to ignore ultra-short fragments.",
   "channels.discord.voice.tts":
     "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":
