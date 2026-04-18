@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   existsSync: vi.fn().mockReturnValue(false),
@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   readFileSync: vi.fn().mockReturnValue("{}"),
   readdirSync: vi.fn().mockReturnValue([]),
   execSync: vi.fn().mockReturnValue(""),
+  execFileSync: vi.fn().mockReturnValue(""),
   note: vi.fn(),
 }));
 
@@ -32,6 +33,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...actual,
     execSync: mocks.execSync,
+    execFileSync: mocks.execFileSync,
   };
 });
 
@@ -51,7 +53,12 @@ describe("detectDuplicateInstallations", () => {
     mocks.readFileSync.mockReturnValue("{}");
     mocks.readdirSync.mockReturnValue([]);
     mocks.execSync.mockReturnValue("");
+    mocks.execFileSync.mockReturnValue("");
     process.env = { ...savedEnv, HOME: "/home/testuser" };
+  });
+
+  afterEach(() => {
+    process.env = savedEnv;
   });
 
   it("emits nothing when no installations are found", () => {

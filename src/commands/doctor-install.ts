@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../terminal/note.js";
@@ -92,7 +92,7 @@ export function detectDuplicateInstallations(): void {
     "- Version mixing between installations",
   ];
 
-  if (services.length > 1) {
+  if (services.length >= 1) {
     lines.push(
       "",
       `Also found ${services.length} OpenClaw-related systemd services:`,
@@ -183,11 +183,12 @@ function resolveVersion(realPath: string, displayPath: string): string | undefin
     }
   }
 
-  // Fallback: run the binary
+  // Fallback: run the binary (execFileSync bypasses shell to prevent injection)
   try {
-    const out = execSync(`"${displayPath}" --version 2>/dev/null`, {
+    const out = execFileSync(displayPath, ["--version"], {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["pipe", "pipe", "ignore"],
     });
     const first = out.trim().split("\n")[0];
     if (first) {
